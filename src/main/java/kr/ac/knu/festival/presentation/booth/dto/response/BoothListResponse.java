@@ -16,13 +16,17 @@ public record BoothListResponse(
         long currentWaitingTeams
 ) {
     public static BoothListResponse fromEntity(Booth booth, long currentWaitingTeams) {
+        return fromEntity(booth, currentWaitingTeams, booth.getLikeCount());
+    }
+
+    public static BoothListResponse fromEntity(Booth booth, long currentWaitingTeams, int likeCount) {
         return new BoothListResponse(
                 booth.getId(),
                 booth.getName(),
                 booth.getDescription(),
                 booth.getLocationLat(),
                 booth.getLocationLng(),
-                booth.getLikeCount(),
+                likeCount,
                 booth.getImageUrl(),
                 booth.isWaitingOpen(),
                 currentWaitingTeams

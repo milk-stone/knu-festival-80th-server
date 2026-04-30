@@ -19,13 +19,17 @@ public record BoothDetailResponse(
         List<MenuResponse> menus
 ) {
     public static BoothDetailResponse of(Booth booth, List<Menu> menus, long currentWaitingTeams) {
+        return of(booth, menus, currentWaitingTeams, booth.getLikeCount());
+    }
+
+    public static BoothDetailResponse of(Booth booth, List<Menu> menus, long currentWaitingTeams, int likeCount) {
         return new BoothDetailResponse(
                 booth.getId(),
                 booth.getName(),
                 booth.getDescription(),
                 booth.getLocationLat(),
                 booth.getLocationLng(),
-                booth.getLikeCount(),
+                likeCount,
                 booth.getImageUrl(),
                 booth.isWaitingOpen(),
                 currentWaitingTeams,
