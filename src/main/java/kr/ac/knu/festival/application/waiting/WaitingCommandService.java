@@ -7,6 +7,8 @@ import kr.ac.knu.festival.domain.waiting.entity.WaitingStatus;
 import kr.ac.knu.festival.domain.waiting.repository.WaitingRepository;
 import kr.ac.knu.festival.global.exception.BusinessErrorCode;
 import kr.ac.knu.festival.global.exception.BusinessException;
+import kr.ac.knu.festival.application.booth.BoothRankingStreamService;
+import kr.ac.knu.festival.infra.redis.BoothRankingRedisRepository;
 import kr.ac.knu.festival.infra.security.PhoneLookupHasher;
 import kr.ac.knu.festival.infra.security.PhoneNumberEncryptor;
 import kr.ac.knu.festival.infra.sms.SmsSender;
@@ -19,6 +21,8 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +42,8 @@ public class WaitingCommandService {
     private final SmsSender smsSender;
     private final SmsStatusUpdater smsStatusUpdater;
     private final ThreadPoolTaskExecutor smsExecutor;
+    private final BoothRankingRedisRepository boothRankingRedisRepository;
+    private final BoothRankingStreamService boothRankingStreamService;
 
     public WaitingCommandService(
             BoothRepository boothRepository,
@@ -46,7 +52,9 @@ public class WaitingCommandService {
             PhoneLookupHasher phoneLookupHasher,
             SmsSender smsSender,
             SmsStatusUpdater smsStatusUpdater,
-            @Qualifier("smsExecutor") ThreadPoolTaskExecutor smsExecutor
+            @Qualifier("smsExecutor") ThreadPoolTaskExecutor smsExecutor,
+            BoothRankingRedisRepository boothRankingRedisRepository,
+            BoothRankingStreamService boothRankingStreamService
     ) {
         this.boothRepository = boothRepository;
         this.waitingRepository = waitingRepository;
@@ -55,6 +63,8 @@ public class WaitingCommandService {
         this.smsSender = smsSender;
         this.smsStatusUpdater = smsStatusUpdater;
         this.smsExecutor = smsExecutor;
+        this.boothRankingRedisRepository = boothRankingRedisRepository;
+        this.boothRankingStreamService = boothRankingStreamService;
     }
 
     public WaitingRegisterResponse registerWaiting(Long boothId, WaitingCreateRequest request) {
@@ -84,6 +94,7 @@ public class WaitingCommandService {
 
         long currentWaitingTeams = waitingRepository.countByBoothIdAndStatusIn(boothId, ACTIVE_STATUSES);
         int estimatedWaitMinutes = Math.max(0, (int) (currentWaitingTeams - 1)) * MINUTES_PER_TEAM;
+        incrementWaitingCountAfterCommit(boothId);
         return WaitingRegisterResponse.of(saved, booth, currentWaitingTeams, estimatedWaitMinutes);
     }
 
@@ -97,13 +108,17 @@ public class WaitingCommandService {
     public void enterWaiting(Long waitingId) {
         Waiting waiting = waitingRepository.findById(waitingId)
                 .orElseThrow(() -> new BusinessException(BusinessErrorCode.WAITING_NOT_FOUND));
+        WaitingStatus previousStatus = waiting.getStatus();
         waiting.markEntered();
+        decrementWaitingCountIfBecameInactiveAfterCommit(waiting.getBooth().getId(), previousStatus, waiting.getStatus());
     }
 
     public void cancelWaiting(Long waitingId) {
         Waiting waiting = waitingRepository.findById(waitingId)
                 .orElseThrow(() -> new BusinessException(BusinessErrorCode.WAITING_NOT_FOUND));
+        WaitingStatus previousStatus = waiting.getStatus();
         waiting.markCancelled();
+        decrementWaitingCountIfBecameInactiveAfterCommit(waiting.getBooth().getId(), previousStatus, waiting.getStatus());
     }
 
     public void cancelWaitingByOwner(Long waitingId, String phoneLast4) {
@@ -112,13 +127,17 @@ public class WaitingCommandService {
         if (!phoneNumberEncryptor.matchesLast4(waiting.getPhoneNumber(), phoneLast4)) {
             throw new BusinessException(BusinessErrorCode.PHONE_VERIFICATION_FAILED);
         }
+        WaitingStatus previousStatus = waiting.getStatus();
         waiting.markCancelled();
+        decrementWaitingCountIfBecameInactiveAfterCommit(waiting.getBooth().getId(), previousStatus, waiting.getStatus());
     }
 
     public void skipWaiting(Long waitingId) {
         Waiting waiting = waitingRepository.findById(waitingId)
                 .orElseThrow(() -> new BusinessException(BusinessErrorCode.WAITING_NOT_FOUND));
+        WaitingStatus previousStatus = waiting.getStatus();
         waiting.markSkipped();
+        decrementWaitingCountIfBecameInactiveAfterCommit(waiting.getBooth().getId(), previousStatus, waiting.getStatus());
     }
 
     public WaitingRegisterResponse insertWaiting(Long boothId, WaitingInsertRequest request) {
@@ -145,6 +164,7 @@ public class WaitingCommandService {
 
         long currentWaitingTeams = waitingRepository.countByBoothIdAndStatusIn(boothId, ACTIVE_STATUSES);
         int estimatedWaitMinutes = Math.max(0, (int) (currentWaitingTeams - 1)) * MINUTES_PER_TEAM;
+        incrementWaitingCountAfterCommit(boothId);
         return WaitingRegisterResponse.of(saved, booth, currentWaitingTeams, estimatedWaitMinutes);
     }
 
@@ -217,5 +237,39 @@ public class WaitingCommandService {
             throw new BusinessException(BusinessErrorCode.INVALID_PHONE_NUMBER);
         }
         return phoneNumber.replaceAll("\\D", "");
+    }
+
+    private void incrementWaitingCountAfterCommit(Long boothId) {
+        afterCommit(() -> {
+            boothRankingRedisRepository.incrementWaitingCount(boothId);
+            boothRankingStreamService.markDirty();
+        });
+    }
+
+    private void decrementWaitingCountIfBecameInactiveAfterCommit(
+            Long boothId,
+            WaitingStatus previousStatus,
+            WaitingStatus currentStatus
+    ) {
+        if (!previousStatus.isActive() || currentStatus.isActive()) {
+            return;
+        }
+        afterCommit(() -> {
+            boothRankingRedisRepository.decrementWaitingCount(boothId);
+            boothRankingStreamService.markDirty();
+        });
+    }
+
+    private void afterCommit(Runnable runnable) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            runnable.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                runnable.run();
+            }
+        });
     }
 }

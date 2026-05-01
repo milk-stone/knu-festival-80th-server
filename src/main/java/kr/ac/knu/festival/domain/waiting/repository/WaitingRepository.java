@@ -45,6 +45,14 @@ public interface WaitingRepository extends JpaRepository<Waiting, Long> {
     List<Object[]> countActiveByBooth(@Param("statuses") List<WaitingStatus> statuses);
 
     @Query("""
+            SELECT w.booth.id, COUNT(w) FROM Waiting w
+            WHERE w.status = kr.ac.knu.festival.domain.waiting.entity.WaitingStatus.CALLED
+              AND w.calledAt < :threshold
+            GROUP BY w.booth.id
+            """)
+    List<Object[]> countExpiredCallsByBooth(@Param("threshold") LocalDateTime threshold);
+
+    @Query("""
             SELECT w FROM Waiting w
             WHERE w.booth.id = :boothId
               AND w.phoneLookupHash = :phoneLookupHash
