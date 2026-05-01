@@ -12,6 +12,8 @@ import kr.ac.knu.festival.presentation.booth.dto.request.BoothUpdateRequest;
 import kr.ac.knu.festival.presentation.booth.dto.response.BoothListResponse;
 import kr.ac.knu.festival.presentation.booth.dto.response.BoothResponse;
 import org.springframework.http.ResponseEntity;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 
 import java.util.List;
 
@@ -43,8 +45,8 @@ public interface BoothCommandControllerDocs {
             @Parameter(hidden = true) AdminInfo admin, String sort);
 
     @Operation(summary = "부스 좋아요")
-    ResponseEntity<ApiResponse<BoothResponse>> likeBooth(Long boothId);
+    ResponseEntity<ApiResponse<BoothResponse>> likeBooth(Long boothId, HttpServletRequest request, HttpServletResponse response);
 
     @Operation(summary = "부스 좋아요 취소")
-    ResponseEntity<ApiResponse<BoothResponse>> unlikeBooth(Long boothId);
+    ResponseEntity<ApiResponse<BoothResponse>> unlikeBooth(Long boothId, HttpServletRequest request);
 }

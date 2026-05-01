@@ -6,6 +6,8 @@ import kr.ac.knu.festival.domain.waiting.entity.WaitingStatus;
 import kr.ac.knu.festival.domain.waiting.repository.WaitingRepository;
 import kr.ac.knu.festival.global.exception.BusinessErrorCode;
 import kr.ac.knu.festival.global.exception.BusinessException;
+import kr.ac.knu.festival.infra.redis.BoothRankingRedisRepository;
+import kr.ac.knu.festival.infra.redis.BoothRankingRedisRepository.RedisChangeResult;
 import kr.ac.knu.festival.presentation.booth.dto.request.BoothCreateRequest;
 import kr.ac.knu.festival.presentation.booth.dto.request.BoothUpdateRequest;
 import kr.ac.knu.festival.presentation.booth.dto.response.BoothResponse;
@@ -26,6 +28,8 @@ public class BoothCommandService {
     private final BoothRepository boothRepository;
     private final WaitingRepository waitingRepository;
     private final PasswordEncoder passwordEncoder;
+    private final BoothRankingRedisRepository boothRankingRedisRepository;
+    private final BoothRankingStreamService boothRankingStreamService;
 
     public BoothResponse createBooth(BoothCreateRequest request) {
         Booth booth = Booth.createBooth(
@@ -68,20 +72,38 @@ public class BoothCommandService {
         booth.changeAdminPassword(passwordEncoder.encode(newRawPassword));
     }
 
-    public BoothResponse likeBooth(Long boothId) {
-        int updated = boothRepository.incrementLike(boothId);
-        if (updated == 0) {
-            throw new BusinessException(BusinessErrorCode.BOOTH_NOT_FOUND);
-        }
+    public BoothResponse likeBooth(Long boothId, String anonymousIdHash) {
         Booth booth = boothRepository.findById(boothId)
                 .orElseThrow(() -> new BusinessException(BusinessErrorCode.BOOTH_NOT_FOUND));
-        return BoothResponse.fromEntity(booth);
+        RedisChangeResult result = boothRankingRedisRepository.addLike(boothId, anonymousIdHash);
+        if (!result.available()) {
+            boothRepository.incrementLike(boothId);
+            boothRankingStreamService.markDirty();
+            Booth updatedBooth = boothRepository.findById(boothId)
+                    .orElseThrow(() -> new BusinessException(BusinessErrorCode.BOOTH_NOT_FOUND));
+            return BoothResponse.fromEntity(updatedBooth);
+        }
+        if (result.changed()) {
+            boothRankingStreamService.markDirty();
+        }
+        int likeCount = boothRankingRedisRepository.getLikeCount(boothId, booth.getLikeCount());
+        return BoothResponse.fromEntity(booth, likeCount);
     }
 
-    public BoothResponse unlikeBooth(Long boothId) {
-        boothRepository.decrementLike(boothId);
+    public BoothResponse unlikeBooth(Long boothId, String anonymousIdHash) {
         Booth booth = boothRepository.findById(boothId)
                 .orElseThrow(() -> new BusinessException(BusinessErrorCode.BOOTH_NOT_FOUND));
-        return BoothResponse.fromEntity(booth);
+        if (anonymousIdHash == null) {
+            return BoothResponse.fromEntity(booth, boothRankingRedisRepository.getLikeCount(boothId, booth.getLikeCount()));
+        }
+        RedisChangeResult result = boothRankingRedisRepository.removeLike(boothId, anonymousIdHash);
+        if (!result.available()) {
+            return BoothResponse.fromEntity(booth);
+        }
+        if (result.changed()) {
+            boothRankingStreamService.markDirty();
+        }
+        int likeCount = boothRankingRedisRepository.getLikeCount(boothId, booth.getLikeCount());
+        return BoothResponse.fromEntity(booth, likeCount);
     }
 }

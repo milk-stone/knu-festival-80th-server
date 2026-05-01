@@ -1,11 +1,14 @@
 package kr.ac.knu.festival.presentation.booth.controller;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import kr.ac.knu.festival.application.booth.BoothCommandService;
 import kr.ac.knu.festival.application.booth.BoothQueryService;
 import kr.ac.knu.festival.global.auth.AdminInfo;
 import kr.ac.knu.festival.global.auth.CurrentAdmin;
 import kr.ac.knu.festival.global.response.ApiResponse;
+import kr.ac.knu.festival.infra.security.AnonymousIdCookieManager;
 import kr.ac.knu.festival.presentation.booth.controller.docs.BoothCommandControllerDocs;
 import kr.ac.knu.festival.presentation.booth.dto.request.BoothCreateRequest;
 import kr.ac.knu.festival.presentation.booth.dto.request.BoothPasswordChangeRequest;
@@ -35,6 +38,7 @@ public class BoothCommandController implements BoothCommandControllerDocs {
 
     private final BoothCommandService boothCommandService;
     private final BoothQueryService boothQueryService;
+    private final AnonymousIdCookieManager anonymousIdCookieManager;
 
     @Override
     @PostMapping("/admin/v1/booths")
@@ -93,16 +97,21 @@ public class BoothCommandController implements BoothCommandControllerDocs {
     @Override
     @PostMapping("/api/v1/booths/{booth-id}/likes")
     public ResponseEntity<ApiResponse<BoothResponse>> likeBooth(
-            @PathVariable("booth-id") Long boothId
+            @PathVariable("booth-id") Long boothId,
+            HttpServletRequest request,
+            HttpServletResponse response
     ) {
-        return ResponseEntity.ok(ApiResponse.success(boothCommandService.likeBooth(boothId)));
+        String anonymousIdHash = anonymousIdCookieManager.getOrCreateHashedAnonymousId(request, response);
+        return ResponseEntity.ok(ApiResponse.success(boothCommandService.likeBooth(boothId, anonymousIdHash)));
     }
 
     @Override
     @DeleteMapping("/api/v1/booths/{booth-id}/likes")
     public ResponseEntity<ApiResponse<BoothResponse>> unlikeBooth(
-            @PathVariable("booth-id") Long boothId
+            @PathVariable("booth-id") Long boothId,
+            HttpServletRequest request
     ) {
-        return ResponseEntity.ok(ApiResponse.success(boothCommandService.unlikeBooth(boothId)));
+        String anonymousIdHash = anonymousIdCookieManager.getHashedAnonymousId(request);
+        return ResponseEntity.ok(ApiResponse.success(boothCommandService.unlikeBooth(boothId, anonymousIdHash)));
     }
 }
